@@ -1,0 +1,118 @@
+SERVER
+
+(global_env) tomcuel@MacBook-Pro-de-Tom Src_SQL % ./server.x play
+Waiting for connexion on the port 8080...
+Initial market state:
+400;;CAC40 20 10.0 2026-09-14 16:52:54.201,SP500 10 20.0 2026-09-14 16:52:54.201
+0.0 1000,
+400 100,CAC40 20 10 2026-09-14 16:52:54.201,SP500 10 20 2026-09-14 16:52:54.201
+Pre-open phase, accumulating orders …
+Open phase, calculating equilibrium price …
+Client input : Authentification Request: Client1 123
+Client input : 1 CLIENT_CONNECTED
+Client input : Authentification Request: Client2 123
+Client input : 2 CLIENT_CONNECTED
+Continuous trading phase, running stock market exchange …
+Client input : 1 BUY 1 1 MARKET
+Client input : 2 SELL 1 1 MARKET
+Client input : 2 display portfolio
+Pre-close phase, accumulating orders …
+Market closing phase, calculating equilibrium price …
+Market session ended. Closing all client connections...
+
+-------------- Displaying all messages in the database --------------
+Message ID: 1942912906, Client ID: 0, Sender: SERVER_MESSAGE, Type: SERVER_RESTART, Content: Server launched,Time: 2026-09-14 16:53:01.082
+Message ID: 2298065420, Client ID: 0, Sender: SERVER_MESSAGE, Type: PRE_OPEN_PHASE, Content: Market pre-open phase, accumulating orders,Time: 2026-09-14 16:53:01.087
+Message ID: 1226608731, Client ID: 0, Sender: SERVER_MESSAGE, Type: OPEN_PHASE, Content: Market open phase (fixing),Time: 2026-09-14 16:53:02.088
+Message ID: 507969729, Client ID: 1, Sender: SERVER_MESSAGE, Type: AUTHENTIFICATION_SUCCESS, Content: Authentification success,Time: 2026-09-14 16:53:02.142
+Message ID: 3477974380, Client ID: 1, Sender: SERVER_MESSAGE, Type: CLIENT_CONNECTED, Content: Client connected,Time: 2026-09-14 16:53:02.143
+Message ID: 2431394175, Client ID: 2, Sender: SERVER_MESSAGE, Type: AUTHENTIFICATION_SUCCESS, Content: Authentification success,Time: 2026-09-14 16:53:02.437
+Message ID: 3633305575, Client ID: 2, Sender: SERVER_MESSAGE, Type: CLIENT_CONNECTED, Content: Client connected,Time: 2026-09-14 16:53:02.437
+Message ID: 3328102999, Client ID: 0, Sender: SERVER_MESSAGE, Type: CONTINUOUS_TRADING_PHASE, Content: Market continuous trading phase,Time: 2026-09-14 16:53:03.090
+Message ID: 3793068579, Client ID: 1, Sender: CLIENT_MESSAGE, Type: ORDER, Content: Order created with ID: 2046775013 for client 1 to BUY 1 actions of 1 at the price of 65535$ at time 2026-09-14 16:53:06.896 with trigger type MARKET and trigger price lower 0 and trigger price upper 65535 until validity date 2076-03-01 00:00:00.000,Time: 2026-09-14 16:53:06.896
+Message ID: 1192562745, Client ID: 1, Sender: SERVER_MESSAGE, Type: ACCUMULATING_ORDER, Content: Accumulating the order …,Time: 2026-09-14 16:53:06.897
+Message ID: 531118870, Client ID: 2, Sender: CLIENT_MESSAGE, Type: ORDER, Content: Order created with ID: 3999055659 for client 2 to SELL 1 actions of 1 at the price of 0$ at time 2026-09-14 16:53:13.371 with trigger type MARKET and trigger price lower 0 and trigger price upper 65535 until validity date 2076-03-01 00:00:00.000,Time: 2026-09-14 16:53:13.371
+Message ID: 3082622198, Client ID: 2, Sender: SERVER_MESSAGE, Type: ACCUMULATING_ORDER, Content: Accumulating the order …,Time: 2026-09-14 16:53:13.373
+Message ID: 1710467178, Client ID: 0, Sender: SERVER_MESSAGE, Type: TRANSACTION, Content: Transaction of 1 actions 1 at the price of 10$ between buyer 1 and seller 2 at time 2026-09-14 16:53:13.375,Time: 2026-09-14 16:53:13.375
+Message ID: 2093523829, Client ID: 2, Sender: CLIENT_MESSAGE, Type: DISPLAY_PORTFOLIO, Content: Display portfolio,Time: 2026-09-14 16:53:21.969
+Message ID: 1573670660, Client ID: 0, Sender: SERVER_MESSAGE, Type: PRE_CLOSE_PHASE, Content: Market pre-close phase (fixing),Time: 2026-09-14 16:53:33.209
+Message ID: 1589967834, Client ID: 0, Sender: SERVER_MESSAGE, Type: CLOSE_PHASE, Content: Market close phase, accumulating orders,Time: 2026-09-14 16:53:34.216
+Message ID: 1397381684, Client ID: 0, Sender: SERVER_MESSAGE, Type: SERVER_SHUTDOWN, Content: Server shutdown,Time: 2026-09-14 16:53:34.559
+-------------- End of messages in the database --------------
+
+
+
+CLIENT 1
+ 
+(global_env) tomcuel@MacBook-Pro-de-Tom Src_SQL % ./client_account.x Client1 123
+Client launched...
+Serveur authentification response: AUTHENTIFICATION_SUCCESS 1
+Connected to the server !
+Enter one of the following commands:
+1. Place an order:
+   [BUY/SELL] [quantity] [action_id] [MARKET/LIMIT/STOP/LIMIT_STOP] [price] [trigger_price_lower] [trigger_price_upper] [validity_date: YYYY-MM-DD] [validity_time: HH:MM:SS]
+   Notes:
+     - For MARKET:        do NOT provide price, trigger_price_lower or trigger_price_upper
+     - For LIMIT:         provide [price] and [trigger_price_lower] only
+     - For STOP:          provide [price] and [trigger_price_upper] only
+     - For LIMIT_STOP:    provide [price], [trigger_price_lower] and [trigger_price_upper]
+
+2. Modify client balance:
+   amount [value] [deposit/withdraw]
+
+3. Display information:
+   display [portfolio | pending_orders | completed_orders | market | action_name]
+
+4. Disconnect from server:
+   exit
+
+> BUY 1 1 MARKET
+> 
+Server: Order created with ID: 2046775013 for client 1 to BUY 1 actions of 1 at the price of 65535$ at time 2026-09-14 16:53:06.896 with trigger type MARKET and trigger price lower 0 and trigger price upper 65535 until validity date 2076-03-01 00:00:00.000
+> 
+Server: Order 2046775013 is being accumulated …
+> 
+Server: TRANSACTION: bought 1 of action 1 at 10$ at time 2026-09-14 16:53:13.375
+> 
+Connexion closed by the server.
+
+Connection closed by the server.
+
+
+
+CLIENT 2 
+
+(global_env) tomcuel@MacBook-Pro-de-Tom Src_SQL % ./client_account.x Client2 123
+Client launched...
+Serveur authentification response: AUTHENTIFICATION_SUCCESS 2
+Connected to the server !
+Enter one of the following commands:
+1. Place an order:
+   [BUY/SELL] [quantity] [action_id] [MARKET/LIMIT/STOP/LIMIT_STOP] [price] [trigger_price_lower] [trigger_price_upper] [validity_date: YYYY-MM-DD] [validity_time: HH:MM:SS]
+   Notes:
+     - For MARKET:        do NOT provide price, trigger_price_lower or trigger_price_upper
+     - For LIMIT:         provide [price] and [trigger_price_lower] only
+     - For STOP:          provide [price] and [trigger_price_upper] only
+     - For LIMIT_STOP:    provide [price], [trigger_price_lower] and [trigger_price_upper]
+
+2. Modify client balance:
+   amount [value] [deposit/withdraw]
+
+3. Display information:
+   display [portfolio | pending_orders | completed_orders | market | action_name]
+
+4. Disconnect from server:
+   exit
+
+> SELL 1 1 MARKET
+> 
+Server: Order created with ID: 3999055659 for client 2 to SELL 1 actions of 1 at the price of 0$ at time 2026-09-14 16:53:13.371 with trigger type MARKET and trigger price lower 0 and trigger price upper 65535 until validity date 2076-03-01 00:00:00.000
+> 
+Server: Order 3999055659 is being accumulated …
+> 
+Server: TRANSACTION: sold 1 of action 1 at 10$ at time 2026-09-14 16:53:13.375
+> display portfolio     
+> 
+Server: 390 110,CAC40 19 10 2026-09-14 16:52:54.201,SP500 10 20 2026-09-14 16:52:54.201
+> 
+Connexion closed by the server. 
