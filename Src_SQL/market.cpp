@@ -100,6 +100,10 @@ ID Market::client_id_if_name_and_password_registered(const std::string& client_n
     // prepare the SQL query to search for the client by name and encrypted password
     std::string query = "SELECT client_id FROM clients WHERE name = ? AND encrypted_password = ?";
 
+    // raw sqlite3 API calls bypass Database's own wrapper methods (which lock internally), so this has to take Database's mutex itself 
+    // every client authentication goes through here concurrently
+    std::lock_guard<std::mutex> lock(Database.get_mutex());
+
     sqlite3_stmt* stmt;
     // prepare the SQL query
     if (sqlite3_prepare_v2(Database.get_database(), query.c_str(), -1, &stmt, nullptr) != SQLITE_OK){
@@ -130,26 +134,32 @@ void Market::add_client(const ID& client_id, const std::string& client_name, con
     
     // insert client into the "clients" table
     std::string query = "INSERT INTO clients (client_id, name, encrypted_password, balance) VALUES (?, ?, ?, ?)";
-    sqlite3_stmt* stmt;
-    if (sqlite3_prepare_v2(Database.get_database(), query.c_str(), -1, &stmt, nullptr) == SQLITE_OK){
-        // bind client_id (INTEGER)
-        sqlite3_bind_int(stmt, 1, client_id);
-        // bind client_name (TEXT)
-        sqlite3_bind_text(stmt, 2, client_name.c_str(), -1, SQLITE_STATIC);
-        // bind encrypted_password (BLOB)
-        sqlite3_bind_blob(stmt, 3, encrypted_password.data(), encrypted_password.size(), SQLITE_STATIC);
-        // bind balance (REAL)
-        sqlite3_bind_double(stmt, 4, balance);
-        // execute the insert statement
-        if (sqlite3_step(stmt) != SQLITE_DONE){
-            std::cerr << "Error inserting client into database: " << sqlite3_errmsg(Database.get_database()) << std::endl;
+    {
+        // raw sqlite3 API calls bypass Database's own wrapper methods (which lock internally), so this block has to take Database's mutex itself (see the same note in client_id_if_name_and_password_registered)
+        // scoped tightly to just this block: execute_SQL() below (for the portfolio inserts) locks internally too, and std::mutex isn't recursive
+        // holding this for the whole function would deadlock
+        std::lock_guard<std::mutex> lock(Database.get_mutex());
+        sqlite3_stmt* stmt;
+        if (sqlite3_prepare_v2(Database.get_database(), query.c_str(), -1, &stmt, nullptr) == SQLITE_OK){
+            // bind client_id (INTEGER)
+            sqlite3_bind_int(stmt, 1, client_id);
+            // bind client_name (TEXT)
+            sqlite3_bind_text(stmt, 2, client_name.c_str(), -1, SQLITE_STATIC);
+            // bind encrypted_password (BLOB)
+            sqlite3_bind_blob(stmt, 3, encrypted_password.data(), encrypted_password.size(), SQLITE_STATIC);
+            // bind balance (REAL)
+            sqlite3_bind_double(stmt, 4, balance);
+            // execute the insert statement
+            if (sqlite3_step(stmt) != SQLITE_DONE){
+                std::cerr << "Error inserting client into database: " << sqlite3_errmsg(Database.get_database()) << std::endl;
+            }
+            sqlite3_finalize(stmt);  // finalize the statement after execution
         }
-        sqlite3_finalize(stmt);  // finalize the statement after execution
+        else {
+            std::cerr << "Error preparing SQL insert statement for client: " << sqlite3_errmsg(Database.get_database()) << std::endl;
+        }
     }
-    else {
-        std::cerr << "Error preparing SQL insert statement for client: " << sqlite3_errmsg(Database.get_database()) << std::endl;
-    }
-    
+
     for (const auto& [action_id, quantity] : portfolio){
         // the action will not already be in the client's portfolio since we are creating the client
         std::string query = fmt::format(
@@ -306,8 +316,8 @@ void Market::add_action(const ID& action_id, const std::string& name, const int&
         "INSERT INTO prices (action_id, price, date_time, daily_time) VALUES ({}, {}, {}, {})",
         action_id,
         price,
-        daily_time,
-        date_time
+        date_time,
+        daily_time
     );
     Database.execute_SQL(query2);
 }
@@ -802,14 +812,14 @@ std::string Market::get_orders_info() const
     // getting the buy orders
     std::string buy_query = R"(SELECT o.order_time_date, o.order_time_daily, c.name, o.order_type, o.quantity, a.name, o.trigger_type, o.price, o.trigger_price_lower, o.trigger_price_upper, o.expiration_time_date, o.expiration_time_daily 
                             FROM orders o JOIN actions a ON o.action_id = a.action_id JOIN clients c ON o.client_id = c.client_id
-                            WHERE o.order_type = 'BUY' AND o.order_status = 'PENDING')";
+                            WHERE o.order_type = 'BUY' AND (o.order_status = 'PENDING' or o.order_status = 'WAITING'))";
                             // ORDER BY o.price DESC, o.time DESC)";
     std::vector<std::vector<std::string>> buy_orders_info = Database.execute_SQL_query_vec_strings(buy_query);
 
     // getting the sell orders
     std::string sell_query = R"(SELECT o.order_time_date, o.order_time_daily, c.name, o.order_type, o.quantity, a.name, o.trigger_type, o.price, o.trigger_price_lower, o.trigger_price_upper, o.expiration_time_date, o.expiration_time_daily 
                             FROM orders o JOIN actions a ON o.action_id = a.action_id JOIN clients c ON o.client_id = c.client_id
-                            WHERE o.order_type = 'SELL' AND o.order_status = 'PENDING')";
+                            WHERE o.order_type = 'SELL' AND (o.order_status = 'PENDING' or o.order_status = 'WAITING'))";
                             // ORDER BY o.price ASC, o.time DESC)";
     std::vector<std::vector<std::string>> sell_orders_info = Database.execute_SQL_query_vec_strings(sell_query);
 

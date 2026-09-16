@@ -10,6 +10,14 @@ class Database_Manager
 {
 private:
     sqlite3* Database;
+    // serializes every access to `Database` from any thread. A single sqlite3 connection is shared
+    // by every client-handling thread plus the trigger/expiration watcher thread plus the day-phase
+    // thread, and calls into it (via the wrapper methods below, or directly via get_database() for
+    // the handful of call sites that need raw sqlite3 API access) were happening with zero
+    // synchronization - fine at a couple of clients, but a real segfault risk under concurrent load.
+    // Any code that calls get_database() to make raw sqlite3_* calls directly (bypassing the
+    // wrappers below) MUST hold get_mutex() around that call, the same way the wrappers do internally.
+    mutable std::mutex Mutex;
 public:
     // constructor
     Database_Manager(const std::string& database_name);
@@ -18,6 +26,7 @@ public:
 
     // getters
     sqlite3* get_database() const;
+    std::mutex& get_mutex() const; // see the comment on Mutex above - required for any raw sqlite3_* call site
   
     // functions to execute an SQL query
     void execute_SQL(const std::string& sql); // modify the database

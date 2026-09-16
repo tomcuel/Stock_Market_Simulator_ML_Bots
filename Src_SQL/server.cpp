@@ -937,6 +937,10 @@ void get_or_generate_crypted_keys(Database_Manager& stock_market_database)
 
         // prepare the insert query with placeholders for BLOB data
         std::string insert_key_iv_query = "INSERT INTO encryption_keys (key, iv) VALUES (?, ?)";
+        // this runs once at startup before any client thread exists, so there's no actual concurrency risk here today
+        // but it's still a raw sqlite3 call bypassing the wrapper methods
+        // lock for consistency with the rule established elsewhere (see market.cpp) in case that ever changes
+        std::lock_guard<std::mutex> lock(stock_market_database.get_mutex());
         // use prepared statement to insert the BLOB data
         sqlite3_stmt* stmt;
         if (sqlite3_prepare_v2(stock_market_database.get_database(), insert_key_iv_query.c_str(), -1, &stmt, nullptr) == SQLITE_OK){

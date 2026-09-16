@@ -8,6 +8,11 @@ Database_Manager::Database_Manager(const std::string& database_name)
         std::cerr << "Error opening database: " << sqlite3_errmsg(Database) << std::endl;
         throw std::runtime_error("Error opening database");
     }
+    // by default SQLite fails a query IMMEDIATELY with "database is locked" (SQLITE_BUSY) the moment another connection holds it, 
+    // even for a few milliseconds - this makes it retry internally for up to 5s before giving up
+    // which absorbs the normal brief overlaps (e.g. a prior `server.x` invocation still finishing its own close as a new one starts) instead of failing on them outright
+    // this does NOT help if some OTHER process is holding the file open for longer than that (a still-running `server.x play` from an earlier session, for instance): that still needs killing by hand
+    sqlite3_busy_timeout(Database, 1000);
 }
 
 // destructor
@@ -23,11 +28,17 @@ sqlite3* Database_Manager::get_database() const
     return Database;
 }
 
+std::mutex& Database_Manager::get_mutex() const
+{
+    return Mutex;
+}
+
 
 // functions to execute an SQL query
 // modify the database
 void Database_Manager::execute_SQL(const std::string& sql)
 {
+    std::lock_guard<std::mutex> lock(Mutex);
     char* error_message = nullptr;
     if (sqlite3_exec(Database, sql.c_str(), nullptr, nullptr, &error_message) != SQLITE_OK){
         std::cerr << "Error executing SQL: " << error_message << std::endl;
@@ -38,6 +49,7 @@ void Database_Manager::execute_SQL(const std::string& sql)
 // get an integer result from the database
 int Database_Manager::execute_SQL_query_int(const std::string& sql)
 {
+    std::lock_guard<std::mutex> lock(Mutex);
     sqlite3_stmt* stmt;
     int result = -1; // default if no result
 
@@ -53,6 +65,7 @@ int Database_Manager::execute_SQL_query_int(const std::string& sql)
 // get a vector of integers from the database
 std::vector<int> Database_Manager::execute_SQL_query_ints(const std::string& query)
 {
+    std::lock_guard<std::mutex> lock(Mutex);
     std::vector<int> ints;
     sqlite3_stmt* stmt;
     
@@ -68,6 +81,7 @@ std::vector<int> Database_Manager::execute_SQL_query_ints(const std::string& que
 // get an ID result from the database
 ID Database_Manager::execute_SQL_query_ID(const std::string& sql)
 {
+    std::lock_guard<std::mutex> lock(Mutex);
     sqlite3_stmt* stmt;
     ID result = -1; // default if no result
 
@@ -83,6 +97,7 @@ ID Database_Manager::execute_SQL_query_ID(const std::string& sql)
 // get a vector of IDs from the database
 std::vector<ID> Database_Manager::execute_SQL_query_IDs(const std::string& query)
 {
+    std::lock_guard<std::mutex> lock(Mutex);
     std::vector<ID> ids;
     sqlite3_stmt* stmt;
     
@@ -98,6 +113,10 @@ std::vector<ID> Database_Manager::execute_SQL_query_IDs(const std::string& query
 // return an ID that is not already in the orders table
 ID Database_Manager::get_new_order_id()
 {
+    // NOTE: this does not hold Mutex itself - it delegates every DB touch to execute_SQL_query_ID, which already locks internally. 
+    // Taking Mutex here too would deadlock (std::mutex isn't recursive). 
+    // IDs are random 32-bit values, so two threads picking the exact same "free" id in the same instant is astronomically unlikely
+    // the actual concurrency risk this file had was unsynchronized raw sqlite3 access, not this specific check-then-return pattern
     ID new_order = generate_random_uint32();
     std::string query = fmt::format(
         "SELECT order_id FROM orders WHERE order_id = {}",
@@ -140,6 +159,7 @@ ID Database_Manager::get_new_message_id()
 // get a double result from the database
 double Database_Manager::execute_SQL_query_double(const std::string& sql)
 {
+    std::lock_guard<std::mutex> lock(Mutex);
     sqlite3_stmt* stmt;
     double result = -1.0; // default if no result
 
@@ -155,6 +175,7 @@ double Database_Manager::execute_SQL_query_double(const std::string& sql)
 // get a vector of doubles from the database
 std::vector<double> Database_Manager::execute_SQL_query_doubles(const std::string& query)
 {
+    std::lock_guard<std::mutex> lock(Mutex);
     std::vector<double> doubles;
     sqlite3_stmt* stmt;
     
@@ -170,6 +191,7 @@ std::vector<double> Database_Manager::execute_SQL_query_doubles(const std::strin
 // get a string result from the database
 std::string Database_Manager::execute_SQL_query_string(const std::string& sql)
 {
+    std::lock_guard<std::mutex> lock(Mutex);
     sqlite3_stmt* stmt;
     std::string result;
 
@@ -185,6 +207,7 @@ std::string Database_Manager::execute_SQL_query_string(const std::string& sql)
 // get a vector of strings from the database
 std::vector<std::string> Database_Manager::execute_SQL_query_strings(const std::string& query)
 {
+    std::lock_guard<std::mutex> lock(Mutex);
     std::vector<std::string> strings;
     sqlite3_stmt* stmt;
     
@@ -200,6 +223,7 @@ std::vector<std::string> Database_Manager::execute_SQL_query_strings(const std::
 // get a vector of vectors of strings from the database
 std::vector<std::vector<std::string>> Database_Manager::execute_SQL_query_vec_strings(const std::string& query)
 {
+    std::lock_guard<std::mutex> lock(Mutex);
     std::vector<std::vector<std::string>> results;
     sqlite3_stmt* stmt;
     
@@ -222,6 +246,7 @@ std::vector<std::vector<std::string>> Database_Manager::execute_SQL_query_vec_st
 // get a blob result from the database
 std::vector<unsigned char> Database_Manager::execute_SQL_query_blob(const std::string& query)
 {
+    std::lock_guard<std::mutex> lock(Mutex);
     sqlite3_stmt* stmt;
     std::vector<unsigned char> result;
 
@@ -240,6 +265,7 @@ std::vector<unsigned char> Database_Manager::execute_SQL_query_blob(const std::s
 // get a vector of blobs from the database
 std::vector<std::vector<unsigned char>> Database_Manager::execute_SQL_query_blobs(const std::string& query)
 {
+    std::lock_guard<std::mutex> lock(Mutex);
     std::vector<std::vector<unsigned char>> blobs;
     sqlite3_stmt* stmt;
     
@@ -348,8 +374,8 @@ void Database_Manager::create_tables()
 
     // SQL query to create the "encryption_keys" table
     std::string create_encryption_keys_table = R"(
-        CREATE TABLE encryption_keys (
-            id INT AUTO_INCREMENT PRIMARY KEY,
+        CREATE TABLE IF NOT EXISTS encryption_keys (
+            id INTEGER PRIMARY KEY,
             key BLOB,
             iv BLOB
         );
