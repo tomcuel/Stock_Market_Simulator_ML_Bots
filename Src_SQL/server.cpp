@@ -1002,6 +1002,151 @@ void display_all_messages(Market& stock_market)
 }
 
 
+// formats one order line of a simulation summary: the line is
+// "date time client type quantity action trigger price trigger_price_lower trigger_price_upper expiration_date expiration_time"
+std::string format_order_summary_line(const std::string& order_line)
+{
+    std::istringstream order_fields(order_line);
+    std::string date, time, client_name, type, quantity, action_name, trigger_type, price;
+    std::string trigger_price_lower, trigger_price_upper, expiration_date;
+    if (!(order_fields >> date >> time >> client_name >> type >> quantity >> action_name >> trigger_type >> price >> trigger_price_lower >> trigger_price_upper >> expiration_date)){
+        return "";
+    }
+    return "date " + date + " " + time
+         + ", client's name " + client_name
+         + ", type " + type
+         + ", quantity " + quantity
+         + ", action's name " + action_name
+         + ", trigger type " + trigger_type
+         + ", price " + price
+         + ", trigger price lower " + trigger_price_lower
+         + ", trigger price upper " + trigger_price_upper
+         + ", expiration date " + expiration_date 
+         + ", \n";
+}
+
+
+// writes a human-readable snapshot of the market and every client's portfolio at the end of a session: 
+// - market infos : market_value;orders_still_to_be_executed;latest_action_snapshots
+// - clients' info : cash + holdings + total valuation Reuses the
+// existing get_actions_info()/get_portfolio_info() formatting rather than re-deriving it, so this
+// stays in sync with whatever those already report elsewhere (e.g. the `display` client command)
+void write_simulation_summary(Market& stock_market, const std::string& output_path)
+{
+    std::ofstream summary_file(output_path);
+    if (!summary_file.is_open()){
+        std::cerr << "WARNING: could not write simulation summary to " << output_path << "\n";
+        return;
+    }
+    summary_file << "================ Simulation summary (" << time_to_string(get_current_time_ms()) << ") ================\n\n";
+
+    std::string market_info = stock_market.get_market_info();
+    std::string market_value = market_info.substr(0, market_info.find(';'));
+    std::string orders_still_to_be_executed = market_info.substr(market_info.find(';') + 1, market_info.rfind(';') - market_info.find(';') - 1);
+    std::string latest_action_snapshots = market_info.substr(market_info.rfind(';') + 1);
+    summary_file << "-- Market infos --\n";
+    summary_file << "  Market value: " << market_value << "\n";
+    summary_file << "\n-- Orders still to be executed --" << "\n";
+    {
+        std::istringstream orders_stream(orders_still_to_be_executed);
+        std::string order_line;
+        while (std::getline(orders_stream, order_line, ',')){
+            if (!order_line.empty()){
+                summary_file << format_order_summary_line(order_line);
+            }
+        }
+    }
+    summary_file << "\n";
+    summary_file << "-- Actions (name quantity last_price time) --\n";
+    {
+        std::istringstream actions_stream(stock_market.get_actions_info());
+        std::string action_line;
+        while (std::getline(actions_stream, action_line, ',')){
+            if (!action_line.empty()){
+                std::istringstream action_fields(action_line);
+                std::string action_name, quantity, last_price, time;
+                if (action_fields >> action_name >> quantity >> last_price >> time){
+                    summary_file << "action's name " << action_name
+                                 << ", quantity " << quantity
+                                 << ", last_price " << last_price
+                                 << ", time " << time
+                                 << "\n";
+                }
+            }
+        }
+    }
+    summary_file << "\n";
+
+    std::vector<ID> client_ids = stock_market.get_database().execute_SQL_query_IDs("SELECT client_id FROM clients ORDER BY client_id ASC");
+    summary_file << "-- Clients (" << client_ids.size() << ") --\n";
+    for (const auto& client_id : client_ids){
+        std::string query = fmt::format("SELECT name FROM clients WHERE client_id = {}", client_id);
+        std::string client_name = stock_market.get_database().execute_SQL_query_string(query);
+        Client client(client_id, stock_market.get_database());
+        summary_file << "  " << client_name << " (id " << client_id << "):\n";
+
+        std::string portfolio_info(client.get_portfolio_info());
+        std::string value_balance = portfolio_info.substr(0, portfolio_info.find(','));
+        {
+            std::istringstream value_balance_stream(value_balance);
+            std::string value, balance;
+            if (value_balance_stream >> value >> balance){
+                summary_file << "    Portfolio value: " << value << "\n";
+                summary_file << "    Cash balance: " << balance << "\n";
+            }
+        }
+
+        summary_file << "    Holdings:\n";
+        std::string actions_info = portfolio_info.substr(portfolio_info.find(',') + 1);
+        {
+            std::istringstream actions_stream(actions_info);
+            std::string action_line;
+            while (std::getline(actions_stream, action_line, ',')){
+                if (!action_line.empty()){
+                    std::istringstream action_fields(action_line);
+                    std::string action_name, quantity, last_price;
+                    if (action_fields >> action_name >> quantity >> last_price){
+                        summary_file << "    Action: " << action_name
+                                     << ", quantity: " << quantity
+                                     << ", last_price: " << last_price
+                                     << "\n";
+                    }
+                }
+            }
+        }
+
+        std::string completed_orders = client.get_completed_orders_info();
+        if (!completed_orders.empty()){
+            summary_file << "    Completed orders:\n";
+            std::istringstream completed_orders_stream(completed_orders);
+            std::string completed_order_line;
+            while (std::getline(completed_orders_stream, completed_order_line, ',')){
+                if (!completed_order_line.empty()){
+                    summary_file << format_order_summary_line(completed_order_line);
+                }
+            }
+        }
+
+        std::string pending_orders = client.get_pending_orders_info();
+        if (!pending_orders.empty()){
+            summary_file << "    Pending orders:\n";
+            std::istringstream pending_orders_stream(pending_orders);
+            std::string pending_order_line;
+            while (std::getline(pending_orders_stream, pending_order_line, ',')){
+                if (!pending_order_line.empty()){
+                    summary_file << format_order_summary_line(pending_order_line);
+                }
+            }
+        }
+        summary_file << "\n";
+    }
+
+    summary_file << "================ End of summary ================\n";
+    summary_file.close();
+    std::cout << "Simulation summary written to " << output_path << "\n";
+}
+
+
 int main(int argc, char* argv[])
 {
     // a send() to a client socket that the peer has already closed raises SIGPIPE by default, which kills the whole server process
@@ -1025,46 +1170,80 @@ int main(int argc, char* argv[])
 
     // handle command-line arguments
     if (argc <= 1){
-        std::cerr << "Usage: " << argv[0] << " [init|reset|reset_prices|play]\n";
+        std::cerr << "Usage: " << argv[0] << " [init|reset|play]\n";
         return EXIT_FAILURE;
     }
     std::string arg = argv[1];
+    if (arg == "reset"){
+        Stock_Market_Database.reset_database();
+        // update or generate the encryption keys
+        get_or_generate_crypted_keys(Stock_Market_Database);
+        Stock_Market_Database.close_database(); // close the database
+        return EXIT_SUCCESS;
+    }
     if (arg == "init"){
         // by default we recreate the original 2 clients / 2 actions demo setup (fully backward compatible)
-        // passing two extra integers lets you generate an arbitrary number of synthetic clients and actions
-        // for load-testing / multi-client simulation: `./server.x init <num_clients> <num_actions>`<clients_balance>
-        if (argc >= 4){
-            int num_clients = std::max(1, std::atoi(argv[2]));
-            int num_actions = std::max(1, std::atoi(argv[3]));
+        if (argc < 3){
+            // adding the init actions
+            Stock_Market.add_action(1, "CAC40", 20, 10.0, server_launch_time_daily, server_launch_time_date);
+            Stock_Market.add_action(2, "SP500", 10, 20.0, server_launch_time_daily, server_launch_time_date);
 
-            std::mt19937 rng(std::random_device{}());
-            std::uniform_real_distribution<double> price_dist(10.0, 250.0);
-            std::uniform_int_distribution<int> shares_dist(50, 500);
-            std::uniform_int_distribution<int> starting_qty_dist(0, 25);
+            // adding the init clients
+            std::string password_1 = "123";
+            std::string encrypted_password_1 = encrypt_AES(password_1, key, iv);
+            Stock_Market.add_client(1, "Client1", encrypted_password_1, 1000.0,{});
+            std::string password_2 = "123";
+            std::string encrypted_password_2 = encrypt_AES(password_2, key, iv);
+            Stock_Market.add_client(2, "Client2", encrypted_password_2, 100.0, {{1, 20}, {2, 10}});
 
-            // generate the synthetic actions, each with a random initial price
-            for (int action_id = 1; action_id <= num_actions; ++action_id){
-                std::string name = fmt::format("STOCK{}", action_id);
-                int outstanding_shares = shares_dist(rng);
-                double initial_price = price_dist(rng);
-                Stock_Market.add_action(action_id, name, outstanding_shares, initial_price, server_launch_time_daily, server_launch_time_date);
+            Stock_Market_Database.close_database(); // close the database
+            return EXIT_SUCCESS;
+        }
+        // passing two extra integers lets you generate an arbitrary number of synthetic clients and their balances
+        int num_clients = std::max(1, std::atoi(argv[2]));
+        int clients_balance = std::max(0, std::atoi(argv[3]));
+
+        std::mt19937 rng(std::random_device{}());
+        std::uniform_real_distribution<double> price_dist(10.0, 250.0); // only used if we generate synthetic actions, not when using real prices
+        std::uniform_int_distribution<int> shares_dist(50, 500);
+        std::uniform_int_distribution<int> starting_qty_dist(0, 25);
+        std::uniform_int_distribution<std::size_t> num_positions_dist(1, 5); // only used if we use real prices, to avoid spreading a client's starting portfolio too thinly across dozens of tickers
+        
+        // generate the synthetic clients, each with some cash and a small random starting portfolio
+        // so that both BUY and SELL orders can be exercised right away by a bot/launcher script
+        const std::string password_chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+        std::uniform_int_distribution<std::size_t> password_dist(0, password_chars.size() - 1);
+
+        // the database only ever stores the AES-encrypted password, a client is supposed to know his
+        // this file is the only place the plaintext ever lands, purely so a local load-testing/launcher script can log each client in with its actual (now-random, no-longer-"123") password. 
+        // it is overwritten on every `init` run, so treat it as a disposable local secrets file, not something to commit
+        std::ofstream credentials_file("../Data/generated_credentials.csv");
+        credentials_file << "client_id,name,password\n";
+
+        // the next argument let you define wether you want to use real prices or not (0 = no, 1 = yes)
+        // the launcher file will make sure that the prices are correctly loaded in the database at this point 
+        bool use_real_prices = false;
+        if (argc >= 5){
+            use_real_prices = std::atoi(argv[4]) != 0;
+        }
+        if (use_real_prices){
+            // Check if there are any actions in the database
+            std::vector<ID> action_ids = Stock_Market_Database.execute_SQL_query_IDs("SELECT action_id FROM actions");
+            if (action_ids.empty()){
+                std::cerr << "No actions found in the database. Seed actions first, e.g.:\n"
+                        << "  ./server.x reset\n"
+                        << "  python3 ../Data/enter_in_database.py --db ../Stock_Market_App.db\n";
+                Stock_Market_Database.close_database();
+                return EXIT_FAILURE;
             }
-
-            // generate the synthetic clients, each with some cash and a small random starting portfolio
-            // so that both BUY and SELL orders can be exercised right away by a bot/launcher script
-            const std::string password_chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-            std::uniform_int_distribution<std::size_t> password_dist(0, password_chars.size() - 1);
-
-            // the database only ever stores the AES-encrypted password, a client is supposed to know his
-            // this file is the only place the plaintext ever lands, purely so a local load-testing/launcher script can log each client in with its actual (now-random, no-longer-"123") password. 
-            // it is overwritten on every `init` run, so treat it as a disposable local secrets file, not something to commit
-            std::ofstream credentials_file("../Data/generated_credentials.csv");
-            credentials_file << "client_id,name,password\n";
+            shares_dist = std::uniform_int_distribution<int>(0, action_ids.size() - 1);
+            // how many distinct actions each client gets a starting position in, so a client trading
+            // against a large real universe (dozens of tickers) doesn't end up with a portfolio spread
+            // so thin every single holding rounds down to a handful of shares
+            num_positions_dist = std::uniform_int_distribution<std::size_t>(1, std::min<std::size_t>(5, action_ids.size()));
 
             for (int client_id = 1; client_id <= num_clients; ++client_id){
                 std::string name = fmt::format("Client{}", client_id);
-
-                // password generation: 12 random alphanumeric characters
                 std::string password;
                 password.reserve(12);
                 for (int i = 0; i < 12; ++i){
@@ -1073,11 +1252,48 @@ int main(int argc, char* argv[])
                 std::string encrypted_password = encrypt_AES(password, key, iv);
                 credentials_file << client_id << "," << name << "," << password << "\n";
 
-                // default balance is 10000.0, but can be overridden by a command-line argument
-                double balance = 10000.0;
-                if (argc >= 5){
-                    balance = std::max(0.0, std::atof(argv[4]));
+                // generate a random starting portfolio for the client
+                std::unordered_map<ID, int> portfolio;
+                std::size_t num_positions = num_positions_dist(rng);
+                for (std::size_t i = 0; i < num_positions; ++i){
+                    ID action_id = action_ids[shares_dist(rng)];
+                    int quantity = starting_qty_dist(rng);
+                    if (quantity > 0){
+                        portfolio[action_id] += quantity;
+                    }
                 }
+                Stock_Market.add_client(client_id, name, encrypted_password, clients_balance, portfolio);
+            }
+
+            std::cout << "Initialized " << num_clients << " clients across " << action_ids.size() << " existing actions\n";
+            std::cout << "Client credentials (plaintext, local testing only) written to ../Data/generated_credentials.csv\n";
+            Stock_Market_Database.close_database();
+            return EXIT_SUCCESS;
+        }
+        else{ // not using the real prices, generate synthetic actions with random initial prices
+            if (argc < 6){
+                std::cerr << "Usage: " << argv[0] << " init_clients <num_clients> <clients_balance> <use_real_prices> <num_actions>\n";
+                return EXIT_FAILURE;
+            }
+            int num_actions = std::max(1, std::atoi(argv[5]));
+
+            // generate the synthetic actions, each with a random initial price
+            for (int action_id = 1; action_id <= num_actions; ++action_id){
+                std::string name = fmt::format("STOCK{}", action_id);
+                int outstanding_shares = shares_dist(rng);
+                double initial_price = price_dist(rng);
+                Stock_Market.add_action(action_id, name, outstanding_shares, initial_price, server_launch_time_daily, server_launch_time_date);
+            }
+            
+            for (int client_id = 1; client_id <= num_clients; ++client_id){
+                std::string name = fmt::format("Client{}", client_id);
+                std::string password;
+                password.reserve(12);
+                for (int i = 0; i < 12; ++i){
+                    password += password_chars[password_dist(rng)];
+                }
+                std::string encrypted_password = encrypt_AES(password, key, iv);
+                credentials_file << client_id << "," << name << "," << password << "\n";
 
                 // generate a random starting portfolio for the client
                 std::unordered_map<ID, int> portfolio;
@@ -1087,7 +1303,7 @@ int main(int argc, char* argv[])
                         portfolio[action_id] = quantity;
                     }
                 }
-                Stock_Market.add_client(client_id, name, encrypted_password, balance, portfolio);
+                Stock_Market.add_client(client_id, name, encrypted_password, clients_balance, portfolio);
             }
 
             std::cout << "Initialized " << num_clients << " clients and " << num_actions << " actions.\n";
@@ -1095,33 +1311,6 @@ int main(int argc, char* argv[])
             Stock_Market_Database.close_database(); // close the database
             return EXIT_SUCCESS;
         }
-
-        // adding the init actions
-        Stock_Market.add_action(1, "CAC40", 20, 10.0, server_launch_time_daily, server_launch_time_date);
-        Stock_Market.add_action(2, "SP500", 10, 20.0, server_launch_time_daily, server_launch_time_date);
-
-        // adding the init clients
-        std::string password_1 = "123";
-        std::string encrypted_password_1 = encrypt_AES(password_1, key, iv);
-        Stock_Market.add_client(1, "Client1", encrypted_password_1, 1000.0,{});
-        std::string password_2 = "123";
-        std::string encrypted_password_2 = encrypt_AES(password_2, key, iv);
-        Stock_Market.add_client(2, "Client2", encrypted_password_2, 100.0, {{1, 20}, {2, 10}});
-
-        Stock_Market_Database.close_database(); // close the database
-        return EXIT_SUCCESS;
-    } 
-    if (arg == "reset"){
-        Stock_Market_Database.reset_database();
-        // update or generate the encryption keys
-        get_or_generate_crypted_keys(Stock_Market_Database);
-        Stock_Market_Database.close_database(); // close the database
-        return EXIT_SUCCESS;
-    }
-    if (arg == "reset_prices"){
-        Stock_Market_Database.reset_database_action_prices(server_launch_time_daily, server_launch_time_date);
-        Stock_Market_Database.close_database(); // close the database
-        return EXIT_SUCCESS;
     } 
     // handle the play part there
     if (argc < 2 || std::string(argv[1]) != "play"){        
@@ -1148,15 +1337,12 @@ int main(int argc, char* argv[])
         perror("Error listen");
         exit(EXIT_FAILURE);
     }
-    std::cout << "Waiting for connexion on the port " << SERVER_PORT << "...\n";
 
-    std::cout << "Initial market state:\n";
-    std::cout << Stock_Market.get_market_info() << std::endl;
-    Client client1(1, Stock_Market_Database);
-    std::cout << client1.get_portfolio_info() << std::endl;
-    Client client2(2, Stock_Market_Database);
-    std::cout << client2.get_portfolio_info() << std::endl;
-    // change to for client in ...
+    // write a final human-readable snapshot of the market and every client's portfolio
+    // (put into comments if we're in the case of a huge number of prices history if using the real prices, will mess up the launcher script otherwise)
+    write_simulation_summary(Stock_Market, "../Data/simulation_summary_before.txt");
+
+    std::cout << "Waiting for connexion on the port " << SERVER_PORT << "...\n";
 
     // adding to the message log that the server was launched
     Message server_launch(Stock_Market.get_database().get_new_message_id(), Stock_Market.get_database());
@@ -1184,6 +1370,9 @@ int main(int argc, char* argv[])
 
     // start the trigger/expiration watcher: promotes waiting LIMIT/STOP/LIMIT_STOP orders into the live book once their price condition is met, and expires the ones that ran out of validity time
     int trigger_poll_interval = 500; // milliseconds between two scans of the waiting orders
+    if (argc >= 8){
+        trigger_poll_interval = std::max(100, std::atoi(argv[7]));
+    }
     std::thread trigger_thread(trigger_and_expiration_watcher, std::ref(Stock_Market), trigger_poll_interval);
 
     // join the market thread to ensure the market session ends
@@ -1210,6 +1399,9 @@ int main(int argc, char* argv[])
     // display all the messages contained in the database
     display_all_messages(Stock_Market);
 
+    // write a final human-readable snapshot of the market and every client's portfolio
+    write_simulation_summary(Stock_Market, "../Data/simulation_summary_after.txt");
+
     Stock_Market_Database.close_database(); // close the database
     close(server_fd);
     return EXIT_SUCCESS;
@@ -1217,7 +1409,6 @@ int main(int argc, char* argv[])
 // command to use the main
 /*
 ./server.x reset : to reset the database entirely
-./server.x reset_prices : to reset the prices of the actions in the database to only the last price and the given time (suppressed the history of prices)
-./server.x init <num_clients> <num_actions> <clients_balance> : to initialize the database with a given number of clients and actions (if no numbers are given, it will initialize the database with 2 clients and 2 actions)
-./server.x play <pre_open_time_delay> <open_time_delay> <continuous_trading_time_delay> <continuous_trading_loop_duration> <pre_close_time_delay> : to play a session with the market
+./server.x init <num_clients> <clients_balance> <use_real_prices> <num_actions> : to initialize the database with a given number of clients, their balance and a given number of actions with random prices (if <use_real_prices> is 1, the actions will be initialized with real prices from the internet), fall back if nothing is provided to the default 2 clients and 2 actions with predefined actions
+./server.x play <pre_open_time_delay> <open_time_delay> <continuous_trading_time_delay> <continuous_trading_loop_duration> <pre_close_time_delay> <trigger_poll_interval> : to play a session with the market
 */
