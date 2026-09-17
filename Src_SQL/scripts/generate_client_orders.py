@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
-Generates a sequence of commands for one simulated client, in the exact format that
-client_account.cpp reads line by line from stdin. Piping the output of this script into
-client_account.x lets you drive a non-interactive "bot" client without touching a keyboard,
-which is what launch_multi_client_test.sh uses to spin up many clients at once.
+Generates a sequence of commands for one simulated client, in the exact format that client_account.cpp reads line by line from stdin. 
+Piping the output of this script into client_account.x lets you drive a non-interactive "bot" client without touching a keyboard,
+which is what launch_multi_client_test.sh uses to spin up many clients at once
 
 Order line format (see Src_SQL/server.cpp for the authoritative parser):
     [BUY/SELL] [quantity] [action_id] [MARKET/LIMIT/STOP/LIMIT_STOP] [price] [trigger_price_lower] [trigger_price_upper] [validity_date] [validity_time]
@@ -15,6 +14,7 @@ Order line format (see Src_SQL/server.cpp for the authoritative parser):
 
 Usage:
     python3 generate_client_orders.py --num-actions 5 --num-orders 20 --seed 1 > client1_commands.txt
+    python3 generate_client_orders.py --action-prices 3:189.4 7:412.9 12:65.2 --num-orders 20 --seed 1
     ./client_account.x Client1 123 < client1_commands.txt
 """
 import argparse
@@ -22,11 +22,11 @@ import random
 import sys
 
 
-def build_order(rng: random.Random, num_actions: int, reference_prices: list[float]) -> str:
-    action_id = rng.randint(1, num_actions)
+def build_order(rng: random.Random, action_ids: list[int], reference_prices: dict[int, float]) -> str:
+    action_id = rng.choice(action_ids)
     side = rng.choice(["BUY", "SELL"])
     quantity = rng.randint(1, 10)
-    ref_price = reference_prices[action_id - 1]
+    ref_price = reference_prices[action_id]
 
     trigger = rng.choices(
         ["MARKET", "LIMIT", "STOP", "LIMIT_STOP"],
@@ -56,7 +56,8 @@ def build_order(rng: random.Random, num_actions: int, reference_prices: list[flo
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--num-actions", type=int, default=2, help="number of actions registered on the server")
+    parser.add_argument("--num-actions", type=int, default=2, help="synthetic mode: trade action ids 1..N, each with a random reference price (default: 2)")
+    parser.add_argument("--action-prices", nargs="+", metavar="ACTION_ID:PRICE", help="real-data mode: explicit 'action_id:reference_price' pairs to trade, e.g. from querying the actions/prices tables after Data/enter_in_database.py has run")
     parser.add_argument("--num-orders", type=int, default=10, help="number of orders this client will submit")
     parser.add_argument("--seed", type=int, default=None, help="RNG seed, for reproducible test runs")
     parser.add_argument("--reference-price", type=float, default=50.0, help="rough reference price used to generate plausible LIMIT/STOP prices (per action, +/-15%%)")
@@ -65,11 +66,20 @@ def main() -> None:
     args = parser.parse_args()
 
     rng = random.Random(args.seed)
-    reference_prices = [round(args.reference_price * rng.uniform(0.5, 1.5), 2) for _ in range(args.num_actions)]
+
+    if args.action_prices:
+        reference_prices: dict[int, float] = {}
+        for pair in args.action_prices:
+            action_id_str, price_str = pair.split(":", 1)
+            reference_prices[int(action_id_str)] = float(price_str)
+        action_ids = list(reference_prices.keys())
+    else:
+        action_ids = list(range(1, args.num_actions + 1))
+        reference_prices = {action_id: round(args.reference_price * rng.uniform(0.5, 1.5), 2) for action_id in action_ids}
 
     lines = []
     for i in range(1, args.num_orders + 1):
-        lines.append(build_order(rng, args.num_actions, reference_prices))
+        lines.append(build_order(rng, action_ids, reference_prices))
         if args.display_every > 0 and i % args.display_every == 0:
             lines.append("display market")
 
