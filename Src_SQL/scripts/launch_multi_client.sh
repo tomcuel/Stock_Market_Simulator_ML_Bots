@@ -6,28 +6,37 @@
 #   ./launch_multi_client.sh [num_clients] [num_actions] [orders_per_client] [options]
 #
 # Options:
-#   --h, --help        Show this help message and exit
-#   --terminals        Open each client in a separate macOS Terminal window (required here)
-#   --continue_session Don't reset the database, continue from the last session (default: False)
-#   --clients_balance  Starting balance for each client (default: 10000)
-#   --command-delay N  Delay between commands from the same client (default: 0.5s)
-#   --random-delay N   Random jitter added to command delay (default: 0.2s)
-#   --pre_open_time_delay N  Delay before the market opens (default: 1000ms)
-#   --open_time_delay N  Delay during market open (default: 1000ms)
-#   --continuous_trading_time_delay N  Delay during continuous trading (default: 30000ms)
+#   --h, --help                           Show this help message and exit
+#   --terminals                           Open each client in a separate macOS Terminal window (required here)
+#   --reload_prices                       Refetch + save the yahoo finance data (keeping only the tickers in `tickers.txt`)
+#   --period N                            Type of yahoo finance period to fetch (default: 5y)
+#   --interval N                          Type of yahoo finance interval to fetch (default: 1d)
+#   --history_length N                    Minimum number of rows of price history to keep (default: 100)
+#   --use_real_prices                     Use real prices from the database (default: False)
+#   --continue_session                    Don't reset the database, continue from the last session (default: False)
+#   --clients_balance                     Starting balance for each client (default: 10000)
+#   --command-delay N                     Delay between commands from the same client (default: 0.5s)
+#   --random-delay N                      Random jitter added to command delay (default: 0.2s)
+#   --pre_open_time_delay N               Delay before the market opens (default: 1000ms)
+#   --open_time_delay N                   Delay during market open (default: 1000ms)
+#   --continuous_trading_time_delay N     Delay during continuous trading (default: 30000ms)
 #   --continuous_trading_loop_duration N  Duration of continuous trading loop (default: 1000ms)
-#   --pre_close_time_delay N  Delay before market close (default: 1000ms)
+#   --pre_close_time_delay N              Delay before market close (default: 1000ms)
+#   --trigger_poll_interval N             Interval between trigger polls (default: 500ms)
 #
 # Examples:
 #
-#   # 2 clients, 1 actions, 10 orders each
-#   ./launch_multi_client.sh --terminals
+#   # 2 clients, 1 actions, 10 orders each, non realistic prices
+#   ./launch_multi_client.sh --terminals 
 #
-#   # 20 clients, 6 actions, 30 orders each
-#   ./launch_multi_client.sh 20 6 30 --terminals
+#   # 2 clients, 1 actions, 10 orders each, continuing from the last session (database not reset)
+#   ./launch_multi_client.sh --terminals --continue_session
+#
+#   # 20 clients, 6 actions, 30 orders each, reloading the yahoo finance data but not using them
+#   ./launch_multi_client.sh 20 6 30 --terminals --reload_prices --period 5y --interval 1d --history_length 10
 #
 #   # Normal mode with 1s between orders + up to 200ms jitter
-#   ./launch_multi_client.sh 20 6 30 --terminals --continue_session --command-delay 1.0 --random-delay 0.2 --clients_balance 5000
+#   ./launch_multi_client.sh 20 6 30 --terminals --use_real_prices --command-delay 1.0 --random-delay 0.2 --clients_balance 100000
 #
 # Both modes redirect each client's output to scripts/logs/clientN.log
 # In --terminals mode the same output is also shown live in that client's window
@@ -45,8 +54,12 @@ NUM_ACTIONS=1
 ORDERS_PER_CLIENT=1
 CLIENTS_BALANCE=10000
 CONTINUE_SESSION="false"
-
+USE_REAL_PRICES="false"
 USE_TERMINALS="false"
+RELOAD_PRICES="false"
+PERIOD="5y"
+INTERVAL="1d"
+HISTORY_LENGTH=100
 
 COMMAND_DELAY="0.5"
 RANDOM_DELAY="0.2"
@@ -56,6 +69,7 @@ OPEN_TIME_DELAY="1000"
 CONTINUOUS_TRADING_TIME_DELAY="30000"
 CONTINUOUS_TRADING_LOOP_DURATION="1000"
 PRE_CLOSE_TIME_DELAY="1000"
+TRIGGER_POLL_INTERVAL="500"
 
 # ============================================================
 # Parse options
@@ -69,6 +83,26 @@ while [[ $# -gt 0 ]]; do
             ;;
         --terminals)
             USE_TERMINALS="true"
+            shift
+            ;;
+        --reload_prices)
+            RELOAD_PRICES="true"
+            shift
+            ;;
+        --period)
+            PERIOD="${2:?--period needs a value}"
+            shift 2
+            ;;
+        --interval)
+            INTERVAL="${2:?--interval needs a value}"
+            shift 2
+            ;;
+        --history_length)
+            HISTORY_LENGTH="${2:?--history_length needs a value}"
+            shift 2
+            ;;
+        --use_real_prices)
+            USE_REAL_PRICES="true"
             shift
             ;;
         --continue_session)
@@ -105,6 +139,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --pre_close_time_delay)
             PRE_CLOSE_TIME_DELAY="${2:?--pre_close_time_delay needs a value}"
+            shift 2
+            ;;
+        --trigger_poll_interval)
+            TRIGGER_POLL_INTERVAL="${2:?--trigger_poll_interval needs a value}"
             shift 2
             ;;
         --*)
@@ -159,6 +197,7 @@ echo " Starting balance: ${CLIENTS_BALANCE}"
 echo " Command delay:    ${COMMAND_DELAY}s"
 echo " Random delay:     ${RANDOM_DELAY}s"
 echo " Terminals:        ${USE_TERMINALS}"
+echo " Use real prices:  ${USE_REAL_PRICES}"
 echo " Continue session: ${CONTINUE_SESSION}"
 echo "=============================================="
 echo ""
@@ -186,9 +225,34 @@ else
 fi
 
 # ============================================================
+# Reload the yahoo finance data (if requested)
+# ============================================================
+if [[ "${RELOAD_PRICES}" == "true" ]]; then
+    echo "==> Refetching and saving the yahoo finance data (Data/fetch_data.py)"
+    (cd "${SRC_SQL_DIR}/../Data" && python3 fetch_data.py --tickers-file tickers.txt --period "${PERIOD}" --interval "${INTERVAL}" --output test)
+    echo "==> Preprocessing the data (Data/preprocess.py)"
+    (cd "${SRC_SQL_DIR}/../Data" && python3 preprocess.py --keep_only_fetched --input test --max-rows "${HISTORY_LENGTH}")
+fi
+
+# ============================================================
+# Enter actions prices in the database
+# ============================================================
+if [[ "${USE_REAL_PRICES}" == "true" && "${CONTINUE_SESSION}" != "true" ]]; then
+    echo "==> Entering actions prices in the database"
+    # It suppose that "../Data/Datasets/processed/all_prices.csv" exists, and that "../Data/fetch_data.py", "../Data/preprocess.py" and "../Data/feature_engineering.py" have been run before (with the right CLI arguments) to generate the CSV file
+    # If not, you can run them manually before running this script
+    #if [[ ! -x "${SRC_SQL_DIR}/../Data/Stock_Market_App.db" ]]; then
+    #    chmod +x "${SRC_SQL_DIR}/../Data/Stock_Market_App.db"
+    #fi
+    (cd "${SRC_SQL_DIR}" && ../Data/enter_in_database.py --db ../Data/Stock_Market_App.db --input ../Data/Datasets/processed/all_prices.csv)
+else
+    echo "==> Using synthetic prices (no action price entry)"
+fi
+
+# ============================================================
 # Seed clients and actions
 # ============================================================
-echo "==> Seeding ${NUM_CLIENTS} clients (with ${CLIENTS_BALANCE} starting balance) and ${NUM_ACTIONS} actions"
+echo "==> Seeding ${NUM_CLIENTS} clients (with ${CLIENTS_BALANCE} starting balance)"
 if [[ "${CONTINUE_SESSION}" == "true" ]]; then
     echo "==> Continuing from the last session (server.x init skipped)"
     echo "==> Note: the number of clients provided should match the existing database clients"
@@ -196,8 +260,11 @@ if [[ "${CONTINUE_SESSION}" == "true" ]]; then
     echo "==> Note: the starting balance provided will be ignored (existing balances remain)"
     echo "==> Unfortunately, there is no way currently coded to verify that the provided numbers match the existing database, numbers need to match"
 else
-    echo "==> Seeding ${NUM_CLIENTS} clients and ${NUM_ACTIONS} actions"
-    (cd "${SRC_SQL_DIR}" && ./server.x init "${NUM_CLIENTS}" "${NUM_ACTIONS}" "${CLIENTS_BALANCE}")
+    USE_REAL_PRICES_FLAG="0"
+    if [[ "${USE_REAL_PRICES}" == "true" ]]; then
+        USE_REAL_PRICES_FLAG="1"
+    fi
+    (cd "${SRC_SQL_DIR}" && ./server.x init "${NUM_CLIENTS}" "${CLIENTS_BALANCE}" "${USE_REAL_PRICES_FLAG}" "${NUM_ACTIONS}")
 fi
 
 # `server.x init` now generates a random 12-char password per synthetic client (instead of the old fixed "123" for everyone) 
@@ -215,14 +282,27 @@ client_password() {
 }
 
 # ============================================================
+# Query the actions prices
+# ============================================================
+if [[ "${USE_REAL_PRICES}" == "true" ]]; then
+    ACTION_PRICE_PAIRS="$(python3 "${SCRIPT_DIR}/query_action_prices.py" --db ../../Data/Stock_Market_App.db | tr '\n' ' ')"
+    if [[ -z "${ACTION_PRICE_PAIRS// /}" ]]; then
+        echo "No actions with price history found in ../../Data/Stock_Market_App.db after loading -- aborting" >&2
+        exit 1
+    fi
+    echo "==> Using real action prices: ${ACTION_PRICE_PAIRS}"  
+fi
+sleep 5
+
+# ============================================================
 # Start server
 # ============================================================
 echo "==> Starting the server"
-(cd "${SRC_SQL_DIR}" && ./server.x play "${PRE_OPEN_TIME_DELAY}" "${OPEN_TIME_DELAY}" "${CONTINUOUS_TRADING_TIME_DELAY}" "${CONTINUOUS_TRADING_LOOP_DURATION}" "${PRE_CLOSE_TIME_DELAY}" > "${LOG_DIR}/server.log" 2>&1 &)
+(cd "${SRC_SQL_DIR}" && ./server.x play "${PRE_OPEN_TIME_DELAY}" "${OPEN_TIME_DELAY}" "${CONTINUOUS_TRADING_TIME_DELAY}" "${CONTINUOUS_TRADING_LOOP_DURATION}" "${PRE_CLOSE_TIME_DELAY}" "${TRIGGER_POLL_INTERVAL}" > "${LOG_DIR}/server.log" 2>&1 &)
 SERVER_PID_FILE="${LOG_DIR}/server.pid"
 # server.x doesn't print its own PID, wait briefly and find the process
 sleep 1
-pgrep -n -f "${SRC_SQL_DIR}/server.x play ${PRE_OPEN_TIME_DELAY} ${OPEN_TIME_DELAY} ${CONTINUOUS_TRADING_TIME_DELAY} ${CONTINUOUS_TRADING_LOOP_DURATION} ${PRE_CLOSE_TIME_DELAY}" > "${SERVER_PID_FILE}" || true
+pgrep -n -f "${SRC_SQL_DIR}/server.x play ${PRE_OPEN_TIME_DELAY} ${OPEN_TIME_DELAY} ${CONTINUOUS_TRADING_TIME_DELAY} ${CONTINUOUS_TRADING_LOOP_DURATION} ${PRE_CLOSE_TIME_DELAY} ${TRIGGER_POLL_INTERVAL}" > "${SERVER_PID_FILE}" || true
 
 # ============================================================
 # Wait for server
@@ -247,13 +327,23 @@ fi
 echo "==> Generating order sequences"
 for i in $(seq 1 "${NUM_CLIENTS}"); do
     CMD_FILE="${CMD_DIR}/client${i}_commands.txt"
-    python3 "${SCRIPT_DIR}/generate_client_orders.py" \
-        --num-actions "${NUM_ACTIONS}" \
-        --num-orders "${ORDERS_PER_CLIENT}" \
-        --seed "${i}" \
-        --display-every 0 \
-        > "${CMD_FILE}"
-# --exit-at-end \
+    if [[ "${USE_REAL_PRICES}" == "true" ]]; then
+        python3 "${SCRIPT_DIR}/generate_client_orders.py" \
+            --action-prices ${ACTION_PRICE_PAIRS} \
+            --num-orders "${ORDERS_PER_CLIENT}" \
+            --seed "${i}" \
+            --display-every 0 \
+            > "${CMD_FILE}"
+            # --exit-at-end \
+    else
+        python3 "${SCRIPT_DIR}/generate_client_orders.py" \
+            --num-actions "${NUM_ACTIONS}" \
+            --num-orders "${ORDERS_PER_CLIENT}" \
+            --seed "${i}" \
+            --display-every 0 \
+            > "${CMD_FILE}"
+            # --exit-at-end \
+    fi
 done
 
 # a single random-ish seed component per invocation, PID + bash's own $RANDOM 
