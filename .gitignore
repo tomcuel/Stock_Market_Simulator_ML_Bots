@@ -1,0 +1,8 @@
+*.o
+*.x
+*.json
+*.log
+*.csv
+*.png
+*.html
+*.snapshot
